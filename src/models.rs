@@ -65,3 +65,18 @@ pub struct NodeDetails {
     pub outgoing: Vec<StoredEdge>,
     pub incoming: Vec<StoredEdge>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceTreeNode {
+    pub node: StoredNode,
+    pub relation: String,
+    pub depth: i64,
+    pub children: Vec<TraceTreeNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceResult {
+    pub target: StoredNode,
+    pub max_depth: i64,
+    pub children: Vec<TraceTreeNode>,
+}

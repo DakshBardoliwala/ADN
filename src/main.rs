@@ -45,6 +45,14 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Trace the upstream impact radius for a node
+    Trace {
+        /// Node identifier
+        id: String,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
     /// MCP server commands
     Mcp {
         #[command(subcommand)]
@@ -74,6 +82,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Ls { path, json } => {
             cmd::ls::run(path, *json)?;
+        }
+        Commands::Trace { id, json } => {
+            cmd::trace::run(id, *json)?;
         }
         Commands::Mcp { command } => match command {
             McpCommands::Serve => cmd::mcp::run_serve(),
