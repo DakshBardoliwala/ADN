@@ -48,8 +48,15 @@ pub fn persist_file_graph(conn: &mut Connection, graph: &ParsedFileGraph) -> any
     }
 
     {
-        let mut insert_edge =
-            tx.prepare("INSERT INTO edges (source_id, target_id, relation) VALUES (?1, ?2, ?3)")?;
+        let mut insert_edge = tx.prepare(
+            "INSERT INTO edges (source_id, target_id, relation)
+             SELECT ?1, ?2, ?3
+             WHERE NOT EXISTS (
+                 SELECT 1
+                 FROM edges
+                 WHERE source_id = ?1 AND target_id = ?2 AND relation = ?3
+             )",
+        )?;
 
         for edge in &graph.edges {
             insert_edge.execute((&edge.source_id, &edge.target_id, &edge.relation))?;
@@ -57,6 +64,26 @@ pub fn persist_file_graph(conn: &mut Connection, graph: &ParsedFileGraph) -> any
     }
 
     tx.commit()?;
+
+    Ok(())
+}
+
+pub fn insert_edge(
+    conn: &Connection,
+    source_id: &str,
+    target_id: &str,
+    relation: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO edges (source_id, target_id, relation)
+         SELECT ?1, ?2, ?3
+         WHERE NOT EXISTS (
+             SELECT 1
+             FROM edges
+             WHERE source_id = ?1 AND target_id = ?2 AND relation = ?3
+         )",
+        params![source_id, target_id, relation],
+    )?;
 
     Ok(())
 }

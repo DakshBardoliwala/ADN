@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use anyhow::{anyhow, bail, Context};
 use rusqlite::{Connection, OptionalExtension};
@@ -9,11 +9,12 @@ use tree_sitter_python::LANGUAGE;
 use uuid::Uuid;
 
 use crate::indexer::languages::python::IMPORT_QUERY_STR;
-use crate::models::{ParsedFileGraph, PendingEdge, PendingNode};
+use crate::models::{DeferredImport, ParsedFileGraph, PendingEdge, PendingNode};
 use crate::storage::db;
 
 const MAX_SCOPE_DEPTH: usize = 1024;
 const MODULE_FILE_PATH: &str = "<module>";
+const LOCAL_SYMBOL_KINDS: [&str; 2] = ["class", "function"];
 
 #[derive(Clone)]
 struct ScopeContext {
@@ -30,26 +31,32 @@ enum ScopeKind {
 #[derive(Default)]
 struct ExtractionState {
     graph: ParsedFileGraph,
-    module_ids: HashMap<String, String>,
     edge_keys: HashSet<(String, String, String)>,
+    deferred_imports: Vec<DeferredImport>,
 }
 
-pub fn parse_file(path: &Path, project_root: &Path, conn: &mut Connection) -> anyhow::Result<()> {
+pub fn parse_file(
+    path: &Path,
+    project_root: &Path,
+    conn: &mut Connection,
+) -> anyhow::Result<Vec<DeferredImport>> {
     let source_code = fs::read_to_string(path)?;
     let relative_file_path = relative_file_path(path, project_root)?;
     let content_hash = blake3::hash(source_code.as_bytes()).to_hex().to_string();
 
     if db::get_file_content_hash(conn, &relative_file_path)?.as_deref() == Some(&content_hash) {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     db::delete_file_graph(conn, &relative_file_path)?;
 
     let tree = parse_python_tree(&source_code)?;
-    let graph =
+    let (graph, deferred_imports) =
         extract_symbols_and_edges(&relative_file_path, conn, &source_code, &tree, content_hash)?;
 
-    db::persist_file_graph(conn, &graph)
+    db::persist_file_graph(conn, &graph)?;
+
+    Ok(deferred_imports)
 }
 
 fn parse_python_tree(source_code: &str) -> anyhow::Result<Tree> {
@@ -69,7 +76,7 @@ fn extract_symbols_and_edges(
     source_code: &str,
     tree: &Tree,
     content_hash: String,
-) -> anyhow::Result<ParsedFileGraph> {
+) -> anyhow::Result<(ParsedFileGraph, Vec<DeferredImport>)> {
     let file_node = PendingNode {
         id: Uuid::new_v4().to_string(),
         kind: "file".to_string(),
@@ -107,7 +114,7 @@ fn extract_symbols_and_edges(
         &mut state,
     )?;
 
-    Ok(state.graph)
+    Ok((state.graph, state.deferred_imports))
 }
 
 fn walk_scope(
@@ -206,19 +213,23 @@ fn extract_imports(
     let mut matches = cursor.matches(&query, root, source_code.as_bytes());
 
     while let Some(query_match) = matches.next() {
-        let module_name = if let Some(import_name) =
+        let (module_name, imported_name, is_wildcard) = if let Some(import_name) =
             capture_text(&query_match, capture_indexes.import_name, source_code)
         {
-            import_name.to_string()
+            (import_name.to_string(), None, false)
         } else if let Some(from_module) =
             capture_text(&query_match, capture_indexes.from_module, source_code)
         {
             if has_capture(&query_match, capture_indexes.from_wildcard) {
-                format!("{from_module}.*")
+                (from_module.to_string(), None, true)
             } else if let Some(imported_name) =
                 capture_text(&query_match, capture_indexes.from_name, source_code)
             {
-                format!("{from_module}.{imported_name}")
+                (
+                    from_module.to_string(),
+                    Some(imported_name.to_string()),
+                    false,
+                )
             } else {
                 continue;
             }
@@ -226,53 +237,62 @@ fn extract_imports(
             continue;
         };
 
-        let module_id = resolve_module_id(conn, state, &module_name)?;
-        push_edge(state, file_node_id, &module_id, "imports");
+        if let Some(target_id) = resolve_local_import_target(
+            conn,
+            file_path,
+            &module_name,
+            imported_name.as_deref(),
+            is_wildcard,
+        )? {
+            push_edge(state, file_node_id, &target_id, "imports");
+        } else {
+            state.deferred_imports.push(DeferredImport {
+                source_id: file_node_id.to_string(),
+                source_file_path: file_path.to_string(),
+                module_name,
+                imported_name,
+                is_wildcard,
+            });
+        }
     }
 
-    let _ = file_path;
     Ok(())
 }
 
-fn resolve_module_id(
-    conn: &Connection,
-    state: &mut ExtractionState,
-    module_name: &str,
-) -> anyhow::Result<String> {
-    if let Some(existing_id) = state.module_ids.get(module_name) {
-        return Ok(existing_id.clone());
+pub fn resolve_deferred_imports(
+    conn: &mut Connection,
+    deferred_imports: &[DeferredImport],
+) -> anyhow::Result<()> {
+    let mut edge_keys = HashSet::new();
+
+    for deferred in deferred_imports {
+        let target_id = if let Some(target_id) = resolve_local_import_target(
+            conn,
+            &deferred.source_file_path,
+            &deferred.module_name,
+            deferred.imported_name.as_deref(),
+            deferred.is_wildcard,
+        )? {
+            target_id
+        } else {
+            get_or_create_synthetic_module_id(
+                conn,
+                &synthetic_module_name(&deferred.module_name, deferred.imported_name.as_deref()),
+            )?
+        };
+
+        let edge_key = (
+            deferred.source_id.clone(),
+            target_id.clone(),
+            "imports".to_string(),
+        );
+
+        if edge_keys.insert(edge_key) {
+            db::insert_edge(conn, &deferred.source_id, &target_id, "imports")?;
+        }
     }
 
-    let existing_db_id = conn
-        .query_row(
-            "SELECT id FROM nodes WHERE kind = 'module' AND name = ?1 LIMIT 1",
-            [module_name],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-
-    if let Some(existing_db_id) = existing_db_id {
-        state
-            .module_ids
-            .insert(module_name.to_string(), existing_db_id.clone());
-        return Ok(existing_db_id);
-    }
-
-    let module_id = Uuid::new_v4().to_string();
-    state.graph.nodes.push(PendingNode {
-        id: module_id.clone(),
-        kind: "module".to_string(),
-        name: module_name.to_string(),
-        file_path: MODULE_FILE_PATH.to_string(),
-        start_line: None,
-        end_line: None,
-        content_hash: None,
-    });
-    state
-        .module_ids
-        .insert(module_name.to_string(), module_id.clone());
-
-    Ok(module_id)
+    Ok(())
 }
 
 fn push_edge(state: &mut ExtractionState, source_id: &str, target_id: &str, relation: &str) {
@@ -333,6 +353,187 @@ fn relative_file_path(path: &Path, project_root: &Path) -> anyhow::Result<String
     }
 
     Ok(relative)
+}
+
+fn resolve_local_import_target(
+    conn: &Connection,
+    source_file_path: &str,
+    module_name: &str,
+    imported_name: Option<&str>,
+    is_wildcard: bool,
+) -> anyhow::Result<Option<String>> {
+    let Some(resolved_module_name) = resolve_module_name(source_file_path, module_name) else {
+        return Ok(None);
+    };
+
+    let candidate_paths = local_module_candidate_paths(&resolved_module_name);
+
+    if imported_name.is_none() || is_wildcard {
+        for candidate_path in &candidate_paths {
+            if let Some(file_id) = find_file_node_id(conn, candidate_path)? {
+                return Ok(Some(file_id));
+            }
+        }
+
+        return Ok(None);
+    }
+
+    let imported_name = imported_name.unwrap_or_default();
+    for candidate_path in &candidate_paths {
+        if find_file_node_id(conn, candidate_path)?.is_some() {
+            if let Some(symbol_id) = find_symbol_id_in_file(conn, candidate_path, imported_name)? {
+                return Ok(Some(symbol_id));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn resolve_module_name(source_file_path: &str, module_name: &str) -> Option<String> {
+    if let Some(stripped) = module_name.strip_prefix('.') {
+        return resolve_relative_module_name(source_file_path, stripped, module_name);
+    }
+
+    Some(module_name.to_string())
+}
+
+fn resolve_relative_module_name(
+    source_file_path: &str,
+    stripped_module_name: &str,
+    full_module_name: &str,
+) -> Option<String> {
+    let leading_dots = full_module_name
+        .chars()
+        .take_while(|character| *character == '.')
+        .count();
+
+    if leading_dots == 0 {
+        return Some(full_module_name.to_string());
+    }
+
+    let mut package_parts = Path::new(source_file_path)
+        .parent()
+        .map(|path| {
+            path.components()
+                .filter_map(component_to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let levels_up = leading_dots.saturating_sub(1);
+    if levels_up > package_parts.len() {
+        return None;
+    }
+
+    for _ in 0..levels_up {
+        package_parts.pop();
+    }
+
+    if !stripped_module_name.is_empty() {
+        package_parts.extend(
+            stripped_module_name
+                .split('.')
+                .filter(|segment| !segment.is_empty())
+                .map(ToString::to_string),
+        );
+    }
+
+    if package_parts.is_empty() {
+        return None;
+    }
+
+    Some(package_parts.join("."))
+}
+
+fn local_module_candidate_paths(module_name: &str) -> Vec<String> {
+    let normalized = module_name.replace('.', "/");
+
+    vec![
+        format!("{normalized}.py"),
+        format!("{normalized}/__init__.py"),
+    ]
+}
+
+fn component_to_string(component: Component<'_>) -> Option<String> {
+    match component {
+        Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+        _ => None,
+    }
+}
+
+fn find_file_node_id(conn: &Connection, file_path: &str) -> anyhow::Result<Option<String>> {
+    conn.query_row(
+        "SELECT id
+         FROM nodes
+         WHERE kind = 'file' AND file_path = ?1
+         LIMIT 1",
+        [file_path],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn find_symbol_id_in_file(
+    conn: &Connection,
+    file_path: &str,
+    symbol_name: &str,
+) -> anyhow::Result<Option<String>> {
+    conn.query_row(
+        "SELECT id
+         FROM nodes
+         WHERE file_path = ?1
+           AND name = ?2
+           AND kind IN (?3, ?4)
+         ORDER BY start_line ASC
+         LIMIT 1",
+        [
+            file_path,
+            symbol_name,
+            LOCAL_SYMBOL_KINDS[0],
+            LOCAL_SYMBOL_KINDS[1],
+        ],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn get_or_create_synthetic_module_id(
+    conn: &mut Connection,
+    module_name: &str,
+) -> anyhow::Result<String> {
+    let existing_id = conn
+        .query_row(
+            "SELECT id
+             FROM nodes
+             WHERE kind = 'module' AND name = ?1 AND file_path = ?2
+             LIMIT 1",
+            [module_name, MODULE_FILE_PATH],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if let Some(existing_id) = existing_id {
+        return Ok(existing_id);
+    }
+
+    let module_id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO nodes (id, kind, name, file_path, start_line, end_line, content_hash)
+         VALUES (?1, 'module', ?2, ?3, NULL, NULL, NULL)",
+        [&module_id, module_name, MODULE_FILE_PATH],
+    )?;
+
+    Ok(module_id)
+}
+
+fn synthetic_module_name(module_name: &str, imported_name: Option<&str>) -> String {
+    match imported_name {
+        Some(imported_name) => format!("{module_name}.{imported_name}"),
+        None => module_name.to_string(),
+    }
 }
 
 fn line_number(row: usize) -> i64 {

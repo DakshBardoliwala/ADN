@@ -1,20 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum NodeKind {
-    File,
-    Function,
-    Class,
-    Interface,
-    Module,
-}
-
-#[derive(Debug)]
-pub struct Symbol {
-    pub name: String,
-    pub kind: NodeKind,
-    pub line_range: (usize, usize),
-}
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct PendingNode {
@@ -39,6 +23,15 @@ pub struct ParsedFileGraph {
     pub file_node: Option<PendingNode>,
     pub nodes: Vec<PendingNode>,
     pub edges: Vec<PendingEdge>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeferredImport {
+    pub source_id: String,
+    pub source_file_path: String,
+    pub module_name: String,
+    pub imported_name: Option<String>,
+    pub is_wildcard: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

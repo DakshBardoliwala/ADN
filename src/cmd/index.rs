@@ -1,4 +1,4 @@
-use crate::indexer::walker;
+use crate::indexer::{parser, walker};
 use crate::storage::db;
 use std::path::PathBuf;
 
@@ -11,7 +11,10 @@ pub fn run(path: &PathBuf) -> anyhow::Result<()> {
 
     // Start Recursive Walk
     println!("Walking directory ...");
-    walker::process_directory(&path, &mut conn)?;
+    let deferred_imports = walker::process_directory(&path, &mut conn)?;
+
+    println!("Resolving deferred imports ...");
+    parser::resolve_deferred_imports(&mut conn, &deferred_imports)?;
 
     println!("Indexing complete!");
     Ok(())

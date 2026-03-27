@@ -1,10 +1,15 @@
 use crate::indexer::parser;
+use crate::models::DeferredImport;
 use ignore::WalkBuilder;
 use rusqlite::Connection;
 use std::path::Path;
 
-pub fn process_directory(path: &Path, conn: &mut Connection) -> anyhow::Result<()> {
+pub fn process_directory(
+    path: &Path,
+    conn: &mut Connection,
+) -> anyhow::Result<Vec<DeferredImport>> {
     let walker = WalkBuilder::new(path).build();
+    let mut deferred_imports = Vec::new();
 
     for entry in walker {
         match entry {
@@ -17,8 +22,11 @@ pub fn process_directory(path: &Path, conn: &mut Connection) -> anyhow::Result<(
                         entry_path.strip_prefix(path).unwrap_or(entry_path)
                     );
 
-                    if let Err(e) = parser::parse_file(entry_path, path, conn) {
-                        eprintln!("Error parsing file {:?}: {}", entry_path, e);
+                    match parser::parse_file(entry_path, path, conn) {
+                        Ok(file_deferred_imports) => deferred_imports.extend(file_deferred_imports),
+                        Err(e) => {
+                            eprintln!("Error parsing file {:?}: {}", entry_path, e);
+                        }
                     }
                 }
             }
@@ -29,7 +37,7 @@ pub fn process_directory(path: &Path, conn: &mut Connection) -> anyhow::Result<(
         }
     }
 
-    Ok(())
+    Ok(deferred_imports)
 }
 
 fn is_supported_file(path: &Path) -> bool {
