@@ -40,3 +40,28 @@ pub struct ParsedFileGraph {
     pub nodes: Vec<PendingNode>,
     pub edges: Vec<PendingEdge>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredNode {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub file_path: String,
+    pub start_line: Option<i64>,
+    pub end_line: Option<i64>,
+    pub content_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredEdge {
+    pub source_id: String,
+    pub target_id: String,
+    pub relation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeDetails {
+    pub node: StoredNode,
+    pub outgoing: Vec<StoredEdge>,
+    pub incoming: Vec<StoredEdge>,
+}

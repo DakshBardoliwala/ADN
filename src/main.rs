@@ -21,6 +21,41 @@ enum Commands {
         /// The path to the directory
         path: PathBuf,
     },
+    /// Search symbols by name
+    Search {
+        /// Symbol name fragment
+        query: String,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a node and its edges
+    Inspect {
+        /// Node identifier
+        id: String,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// List symbols for a file
+    Ls {
+        /// Repo-relative file path
+        path: PathBuf,
+        /// Emit JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// MCP server commands
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Start the MCP server
+    Serve,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -31,6 +66,18 @@ fn main() -> anyhow::Result<()> {
             println!("Indexing project at: {:?}", path);
             cmd::index::run(path)?;
         }
+        Commands::Search { query, json } => {
+            cmd::search::run(query, *json)?;
+        }
+        Commands::Inspect { id, json } => {
+            cmd::inspect::run(id, *json)?;
+        }
+        Commands::Ls { path, json } => {
+            cmd::ls::run(path, *json)?;
+        }
+        Commands::Mcp { command } => match command {
+            McpCommands::Serve => cmd::mcp::run_serve(),
+        },
     }
 
     Ok(())
