@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::ParsedFileGraph;
 use crate::storage::schema;
@@ -9,7 +9,7 @@ pub fn init_db() -> anyhow::Result<Connection> {
     let conn = Connection::open("adn.db")?;
 
     conn.execute_batch(schema::CREATE_TABLES)?;
-    
+
     Ok(conn)
 }
 
@@ -48,14 +48,52 @@ pub fn persist_file_graph(conn: &mut Connection, graph: &ParsedFileGraph) -> any
     }
 
     {
-        let mut insert_edge = tx.prepare(
-            "INSERT INTO edges (source_id, target_id, relation) VALUES (?1, ?2, ?3)",
-        )?;
+        let mut insert_edge =
+            tx.prepare("INSERT INTO edges (source_id, target_id, relation) VALUES (?1, ?2, ?3)")?;
 
         for edge in &graph.edges {
             insert_edge.execute((&edge.source_id, &edge.target_id, &edge.relation))?;
         }
     }
+
+    tx.commit()?;
+
+    Ok(())
+}
+
+pub fn get_file_content_hash(conn: &Connection, file_path: &str) -> anyhow::Result<Option<String>> {
+    conn.query_row(
+        "SELECT content_hash
+         FROM nodes
+         WHERE file_path = ?1 AND kind = 'file'
+         LIMIT 1",
+        [file_path],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|value| value.flatten())
+    .map_err(Into::into)
+}
+
+pub fn delete_file_graph(conn: &mut Connection, file_path: &str) -> anyhow::Result<()> {
+    let tx = conn.transaction()?;
+
+    tx.execute(
+        "DELETE FROM edges
+         WHERE source_id IN (
+             SELECT id FROM nodes WHERE file_path = ?1
+         )
+         OR target_id IN (
+             SELECT id FROM nodes WHERE file_path = ?1
+         )",
+        [file_path],
+    )?;
+
+    tx.execute(
+        "DELETE FROM nodes
+         WHERE file_path = ?1",
+        params![file_path],
+    )?;
 
     tx.commit()?;
 

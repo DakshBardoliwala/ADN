@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use crate::storage::db;
 use crate::indexer::walker;
+use crate::storage::db;
+use std::path::PathBuf;
 
 pub fn run(path: &PathBuf) -> anyhow::Result<()> {
     // Initialize the database

@@ -1,7 +1,7 @@
 mod cmd;
 mod indexer;
-mod storage;
 mod models;
+mod storage;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;

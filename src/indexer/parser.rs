@@ -36,8 +36,18 @@ struct ExtractionState {
 
 pub fn parse_file(path: &Path, project_root: &Path, conn: &mut Connection) -> anyhow::Result<()> {
     let source_code = fs::read_to_string(path)?;
+    let relative_file_path = relative_file_path(path, project_root)?;
+    let content_hash = blake3::hash(source_code.as_bytes()).to_hex().to_string();
+
+    if db::get_file_content_hash(conn, &relative_file_path)?.as_deref() == Some(&content_hash) {
+        return Ok(());
+    }
+
+    db::delete_file_graph(conn, &relative_file_path)?;
+
     let tree = parse_python_tree(&source_code)?;
-    let graph = extract_symbols_and_edges(path, project_root, conn, &source_code, &tree)?;
+    let graph =
+        extract_symbols_and_edges(&relative_file_path, conn, &source_code, &tree, content_hash)?;
 
     db::persist_file_graph(conn, &graph)
 }
@@ -54,21 +64,20 @@ fn parse_python_tree(source_code: &str) -> anyhow::Result<Tree> {
 }
 
 fn extract_symbols_and_edges(
-    path: &Path,
-    project_root: &Path,
+    relative_file_path: &str,
     conn: &Connection,
     source_code: &str,
     tree: &Tree,
+    content_hash: String,
 ) -> anyhow::Result<ParsedFileGraph> {
-    let relative_file_path = relative_file_path(path, project_root)?;
     let file_node = PendingNode {
         id: Uuid::new_v4().to_string(),
         kind: "file".to_string(),
-        name: relative_file_path.clone(),
-        file_path: relative_file_path.clone(),
+        name: relative_file_path.to_string(),
+        file_path: relative_file_path.to_string(),
         start_line: None,
         end_line: None,
-        content_hash: None,
+        content_hash: Some(content_hash),
     };
 
     let mut state = ExtractionState {
@@ -83,7 +92,7 @@ fn extract_symbols_and_edges(
     walk_scope(
         tree.root_node(),
         source_code,
-        &relative_file_path,
+        relative_file_path,
         &mut state,
         None,
         0,
@@ -93,7 +102,7 @@ fn extract_symbols_and_edges(
         conn,
         tree.root_node(),
         source_code,
-        &relative_file_path,
+        relative_file_path,
         &file_node.id,
         &mut state,
     )?;
@@ -189,8 +198,8 @@ fn extract_imports(
     state: &mut ExtractionState,
 ) -> anyhow::Result<()> {
     let language = Language::new(LANGUAGE);
-    let query = Query::new(&language, IMPORT_QUERY_STR)
-        .context("failed to compile Python import query")?;
+    let query =
+        Query::new(&language, IMPORT_QUERY_STR).context("failed to compile Python import query")?;
 
     let capture_indexes = ImportCaptureIndexes::new(&query)?;
     let mut cursor = QueryCursor::new();
@@ -310,15 +319,13 @@ fn child_field_text<'a>(
 }
 
 fn relative_file_path(path: &Path, project_root: &Path) -> anyhow::Result<String> {
-    let relative_path = path
-        .strip_prefix(project_root)
-        .with_context(|| {
-            format!(
-                "failed to compute relative path for {} against {}",
-                path.display(),
-                project_root.display()
-            )
-        })?;
+    let relative_path = path.strip_prefix(project_root).with_context(|| {
+        format!(
+            "failed to compute relative path for {} against {}",
+            path.display(),
+            project_root.display()
+        )
+    })?;
 
     let relative = relative_path.to_string_lossy().replace('\\', "/");
     if relative.is_empty() {
