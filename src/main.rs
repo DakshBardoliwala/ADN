@@ -87,7 +87,7 @@ fn main() -> anyhow::Result<()> {
             cmd::trace::run(id, *json)?;
         }
         Commands::Mcp { command } => match command {
-            McpCommands::Serve => cmd::mcp::run_serve(),
+            McpCommands::Serve => cmd::mcp::run_serve()?,
         },
     }
 
