@@ -2,3 +2,13 @@ AGENTS.md
 CLAUDE.md
 *PLAN.md
 
+.claude/
+.agents/
+.codex/
+
+adn.db
+
+
+# Added by cargo
+
+/target
