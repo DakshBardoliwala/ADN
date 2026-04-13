@@ -11,6 +11,10 @@ readme = "README.md"
 keywords = ["mcp", "static-analysis", "python", "graph", "indexer"]
 categories = ["development-tools", "command-line-utilities"]
 
+[[bin]]
+name = "adn"
+path = "src/main.rs"
+
 [dependencies]
 # CLI & Logging
 clap = { version = "4.5.61", features = ["derive"] }
