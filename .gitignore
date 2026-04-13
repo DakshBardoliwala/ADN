@@ -12,3 +12,4 @@ adn.db
 # Added by cargo
 
 /target
+.mcp.json
