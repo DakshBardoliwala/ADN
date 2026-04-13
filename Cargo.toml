@@ -2,6 +2,14 @@
 name = "adn"
 version = "0.1.0"
 edition = "2021"
+description = "Architectural Discovery Navigation — a high-performance code knowledge graph and MCP server for AI agents."
+license = "Apache-2.0"
+repository = "https://github.com/DakshBardoliwala/ADN"
+homepage = "https://github.com/DakshBardoliwala/ADN"
+documentation = "https://github.com/DakshBardoliwala/ADN#readme"
+readme = "README.md"
+keywords = ["mcp", "static-analysis", "python", "graph", "indexer"]
+categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
 # CLI & Logging

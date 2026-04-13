@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "adn")]
-#[command(about = "Architectural Discovery & Navigation CLI", long_about = None)]
+#[command(about = "Architectural Discovery Navigation CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
