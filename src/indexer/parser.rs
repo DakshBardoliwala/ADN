@@ -214,16 +214,16 @@ fn extract_imports(
 
     while let Some(query_match) = matches.next() {
         let (module_name, imported_name, is_wildcard) = if let Some(import_name) =
-            capture_text(&query_match, capture_indexes.import_name, source_code)
+            capture_text(query_match, capture_indexes.import_name, source_code)
         {
             (import_name.to_string(), None, false)
         } else if let Some(from_module) =
-            capture_text(&query_match, capture_indexes.from_module, source_code)
+            capture_text(query_match, capture_indexes.from_module, source_code)
         {
-            if has_capture(&query_match, capture_indexes.from_wildcard) {
+            if has_capture(query_match, capture_indexes.from_wildcard) {
                 (from_module.to_string(), None, true)
             } else if let Some(imported_name) =
-                capture_text(&query_match, capture_indexes.from_name, source_code)
+                capture_text(query_match, capture_indexes.from_name, source_code)
             {
                 (
                     from_module.to_string(),

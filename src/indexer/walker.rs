@@ -16,7 +16,7 @@ pub fn process_directory(
             Ok(entry) => {
                 let entry_path = entry.path();
 
-                if entry_path.is_file() && is_supported_file(&entry_path) {
+                if entry_path.is_file() && is_supported_file(entry_path) {
                     println!(
                         "Indexing file {:?}",
                         entry_path.strip_prefix(path).unwrap_or(entry_path)
@@ -41,5 +41,5 @@ pub fn process_directory(
 }
 
 fn is_supported_file(path: &Path) -> bool {
-    path.extension().map_or(false, |ext| ext == "py")
+    path.extension().is_some_and(|ext| ext == "py")
 }

@@ -1,8 +1,8 @@
 use crate::indexer::{parser, walker};
 use crate::storage::db;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-pub fn run(path: &PathBuf) -> anyhow::Result<()> {
+pub fn run(path: &Path) -> anyhow::Result<()> {
     // Initialize the database
     let mut conn = db::init_db()?;
 
