@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "adn"
+name = "adn-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -1,5 +1,5 @@
 [package]
-name = "adn"
+name = "adn-server"
 version = "0.1.0"
 edition = "2021"
 description = "Architectural Discovery Navigation — a high-performance code knowledge graph and MCP server for AI agents."
