@@ -2,7 +2,7 @@
 
 ### Your AI finally understands your codebase.
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/DakshBardoliwala/ADN/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/DakshBardoliwala/ADN/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange)](https://www.rust-lang.org/)
 [![MCP Ready](https://img.shields.io/badge/MCP-Claude%20%7C%20Cursor%20%7C%20Codex-purple)](https://modelcontextprotocol.io/)
@@ -21,13 +21,17 @@ AI agents read your code like a document — they find the word `authenticate`, 
 
 - **Recursive Code Intelligence** — Understands the full structure of your project: files, classes, methods, and the relationships between them. Not just text, but a live map.
 
-- **Impact Radius Tracing** — Ask *"what breaks if I change this?"* and get a precise, multi-level dependency tree. The `trace` command is your pre-refactor safety check.
+- **Human-Readable Lookup** — `inspect` and `trace` work with `--name` and `--file`, so you can target `AuthService` in `src/auth.py` directly instead of hunting for UUIDs first.
+
+- **Impact Radius Tracing** — Ask *"what breaks if I change this?"* and get a precise, multi-level dependency tree. Trace depth is configurable, so you can choose a quick local check or a broader upstream scan.
 
 - **Global Import Resolution** — Correctly links `from module import ClassName` to the exact definition, even across files that were indexed in any order. No dangling references.
 
 - **Blazing Fast, Incremental** — Rust-powered and Blake3-hashed. Re-indexing a large project only touches files that actually changed. The rest is instant.
 
-- **Zero-Config MCP Server** — One JSON block in your Claude Desktop or Cursor config and your AI gains four new structural tools. No API keys, no cloud, no setup friction.
+- **Codebase Health Checks** — `adn stats` shows which files are indexed, when they were last updated, and how many local versus external symbols are currently in the graph.
+
+- **Zero-Config MCP Server** — One JSON block in your Claude Desktop or Cursor config and your AI gains structural tools with pagination, local-only filtering, identifier lookup, and bounded trace depth. No API keys, no cloud, no setup friction.
 
 - **Fully Local** — Your code never leaves your machine. The knowledge graph is a single `adn.db` file in your project directory.
 
@@ -37,8 +41,36 @@ AI agents read your code like a document — they find the word `authenticate`, 
 
 ### 1. Install
 
+Choose the distribution path that matches your environment.
+
+#### Shell Installer (Recommended)
+
+For macOS and Linux:
+
 ```bash
-cargo install adn
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/DakshBardoliwala/ADN/releases/latest/download/adn-server-installer.sh | sh
+```
+
+For Windows PowerShell:
+
+```bash
+powershell -c "irb https://github.com/DakshBardoliwala/ADN/releases/latest/download/adn-server-installer.ps1"
+```
+
+This installs a native ADN binary from the latest GitHub release. No Rust toolchain is required.
+
+#### Homebrew
+
+```bash
+brew install dakshbardoliwala/tap/adn-server
+```
+
+#### Cargo
+
+For Rust developers:
+
+```bash
+cargo install adn-server
 ```
 
 ### 2. Index Your Project
@@ -63,27 +95,46 @@ Indexing complete!
 # Find any symbol by name
 adn search authenticate
 
+# Check what ADN has indexed and when
+adn stats
+
 # See everything a file exports
 adn ls src/services/auth.py
 
-# Inspect a node's full connections
-adn inspect <id>
+# Inspect a symbol without looking up a UUID first
+adn inspect --name AuthService --file src/auth.py
 
-# Trace the blast radius of a change
-adn trace <id>
+# Trace the blast radius of a change with explicit depth
+adn trace --name AuthService --file src/auth.py --depth 3
 ```
 
 ---
 
 ## MCP Integration
 
-Connect ADN to your AI in under 2 minutes.
+Connect ADN to your AI through the installed `adn` binary.
 
 **Prerequisites:** Run `adn index .` in your project first.
 
-### Claude Desktop
+### Claude Code
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+```bash
+claude mcp add adn -- adn mcp serve
+```
+
+Claude can also read project-shared MCP configuration from `.mcp.json`.
+
+### Codex
+
+```bash
+codex mcp add adn -- adn mcp serve
+```
+
+Codex stores direct MCP configuration in `~/.codex/config.toml`.
+
+### Manual JSON Configuration
+
+Use this for clients that expect explicit JSON MCP configuration:
 
 ```json
 {
@@ -97,53 +148,39 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-### Cursor
-
-Add to `.cursor/mcp.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "adn": {
-      "command": "adn",
-      "args": ["mcp", "serve"],
-      "cwd": "/absolute/path/to/your/project"
-    }
-  }
-}
-```
-
-> Set `cwd` to the same directory where you ran `adn index`. That's where `adn.db` lives.
+> Set `cwd` to the same directory where you ran `adn index`. That directory contains `adn.db`. If your MCP client does not support `cwd`, start it from the project root instead.
 
 ### Tools Your AI Gains
 
-| Tool | What the AI Can Now Ask |
+| Tool | What It Does for the Agent |
 |---|---|
-| `search_codebase` | *"Find all symbols related to authentication"* |
-| `get_node_details` | *"What does `PaymentService` connect to?"* |
+| `search_codebase` | Search symbols by name fragment with paginated results (`limit`, `offset`) and optional local-only filtering to exclude external module placeholders |
+| `get_node_details` | Fetch node metadata plus incoming and outgoing edges by UUID or by `{ name, file_path }` |
 | `list_file_symbols` | *"What's exported from this file?"* |
-| `trace_impact` | *"What breaks if I change this function?"* |
+| `trace_impact` | Trace upstream impact by UUID or identifier lookup, with configurable bounded recursion depth |
+| `list_indexed_files` | Return the indexed file inventory with `last_indexed` timestamps plus local/external symbol counts |
 
 ---
 
 ## Impact Tracing in Action
 
-Run `adn search authenticate` to find the node ID, then:
-
 ```bash
-adn trace a1b2c3d4-...
+adn trace --name AuthService --file src/auth.py --depth 3
 ```
 
 ```
-Trace Target: [function] authenticate (src/services/auth.py) lines 14-38
+Trace Target: [class] AuthService (src/auth.py) lines 10-74 id=2f3c...
 Max Depth: 3
 
-├─ imports: [file] api/routes.py (src/api/routes.py) lines 1-82 id=e5f6...
-│  └─ imports: [file] main.py (src/main.py) lines 1-40 id=c7d8...
-└─ imports: [file] middleware.py (src/api/middleware.py) lines 1-35 id=9a0b...
+├─ imports: [file] src/api/routes.py (src/api/routes.py) id=41ab...
+│  ├─ imports: [file] src/app.py (src/app.py) id=7d20...
+│  │  └─ imports: [file] src/server.py (src/server.py) id=9c51...
+│  └─ imports: [file] src/jobs/sync_users.py (src/jobs/sync_users.py) id=b13e...
+└─ imports: [file] src/api/middleware.py (src/api/middleware.py) id=55ef...
+   └─ imports: [file] src/server.py (src/server.py) id=9c51...
 ```
 
-**Read this as:** if you change `authenticate`, it will impact `routes.py`, `middleware.py`, and anything that depends on them — surfaced in seconds, before you touch a line of code.
+**Read this as:** changing `AuthService` will affect the API entrypoints that import it, plus the higher-level files that depend on those entrypoints. You can widen or narrow that view with `--depth`.
 
 ---
 
@@ -152,22 +189,31 @@ Max Depth: 3
 | Command | What It Does |
 |---|---|
 | `adn index <path>` | Build (or update) the knowledge graph for a project |
-| `adn search <query>` | Find symbols by name. Add `--json` for scripting |
-| `adn inspect <id>` | Show a node's full metadata and all connected edges |
+| `adn search <query> [--limit N] [--offset N] [--local] [--json]` | Find symbols by name with optional pagination and local-only filtering |
+| `adn inspect [id] [--name SYMBOL --file PATH] [--json]` | Show a node's full metadata and connected edges by UUID or human-readable identifier |
 | `adn ls <path>` | List all symbols in a file, ordered by line number |
-| `adn trace <id>` | Show the upstream dependency tree for any node |
+| `adn trace [id] [--name SYMBOL --file PATH] [--depth N] [--json]` | Show the upstream dependency tree for a node by UUID or identifier, with configurable trace depth |
+| `adn stats [--json]` | Print the indexed file inventory with `last_indexed` timestamps and local/external symbol counts |
 | `adn mcp serve` | Start the MCP server (used by Claude/Cursor config) |
 
 All commands support `--json` for clean, pipeable output.
 
 ---
 
-## Roadmap — v0.2.0
+## Completed in v0.2.0
 
-- [ ] **Rust support** — Extend the parser to index Rust crates alongside Python
-- [ ] **Pagination** — Handle `search` and `ls` results on very large codebases
-- [ ] **Call-graph edges** — Track function *call sites*, not just imports
-- [ ] **`adn export`** — Dump the full graph as JSON or DOT for external tooling
+- [x] Human-readable `inspect` and `trace` lookups with `--name` and `--file`
+- [x] Paginated `search` with `--limit` and `--offset`
+- [x] Local-only search filtering for both CLI and MCP
+- [x] Configurable trace depth for CLI and MCP
+- [x] `adn stats` and `list_indexed_files` for indexed-file health checks
+- [x] Process-level test harness for query and MCP regression coverage
+
+## Upcoming in v0.3.0
+
+- [ ] Multi-language support (Rust parser)
+- [ ] Symbol-level content hashing (`blake3`)
+- [ ] Web-based graph visualizer
 
 ---
 
