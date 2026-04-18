@@ -1,10 +1,11 @@
 use std::io::{self, BufRead, Write};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::models::NodeIdentifier;
 use crate::storage::{db, query};
 
 const JSONRPC_VERSION: &str = "2.0";
@@ -37,8 +38,13 @@ pub fn run_serve() -> anyhow::Result<()> {
             continue;
         }
 
-        match handle_message(&conn, &mut stdout, &mut initialized, &mut handshake_complete, &line)
-        {
+        match handle_message(
+            &conn,
+            &mut stdout,
+            &mut initialized,
+            &mut handshake_complete,
+            &line,
+        ) {
             Ok(()) => {}
             Err(error) => {
                 eprintln!("fatal MCP server error: {error:#}");
@@ -93,7 +99,8 @@ fn handle_message(
         return Ok(());
     }
 
-    if *initialized && !*handshake_complete && method != METHOD_INITIALIZED && method != METHOD_PING {
+    if *initialized && !*handshake_complete && method != METHOD_INITIALIZED && method != METHOD_PING
+    {
         if let Some(id) = request.id {
             write_error_response(
                 stdout,
@@ -119,22 +126,24 @@ fn handle_message(
             Ok(())
         }
         METHOD_TOOLS_LIST => handle_tools_list(stdout, request.id),
-        METHOD_TOOLS_CALL => match handle_tools_call(conn, stdout, request.id.clone(), request.params) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                eprintln!("tools/call failed: {error:#}");
-                if let Some(id) = request.id {
-                    write_error_response(
-                        stdout,
-                        Some(id),
-                        INTERNAL_ERROR,
-                        "Tool execution failed",
-                        Some(json!(error.to_string())),
-                    )?;
+        METHOD_TOOLS_CALL => {
+            match handle_tools_call(conn, stdout, request.id.clone(), request.params) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    eprintln!("tools/call failed: {error:#}");
+                    if let Some(id) = request.id {
+                        write_error_response(
+                            stdout,
+                            Some(id),
+                            INTERNAL_ERROR,
+                            "Tool execution failed",
+                            Some(json!(error.to_string())),
+                        )?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
-        },
+        }
         _ => {
             if let Some(id) = request.id {
                 write_error_response(stdout, Some(id), METHOD_NOT_FOUND, "Method not found", None)?;
@@ -191,6 +200,18 @@ fn handle_tools_list(stdout: &mut io::Stdout, id: Option<Value>) -> anyhow::Resu
                         "query": {
                             "type": "string",
                             "description": "Case-insensitive symbol name fragment."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of results to return. Defaults to 50."
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Result offset for pagination. Defaults to 0."
+                        },
+                        "local_only": {
+                            "type": "boolean",
+                            "description": "Exclude external module placeholders with file_path '<module>'. Defaults to true."
                         }
                     },
                     "required": ["query"],
@@ -206,9 +227,22 @@ fn handle_tools_list(stdout: &mut io::Stdout, id: Option<Value>) -> anyhow::Resu
                         "id": {
                             "type": "string",
                             "description": "Exact node identifier."
+                        },
+                        "identifier": {
+                            "type": "object",
+                            "description": "Alternative node lookup by symbol name and repo-relative file path.",
+                            "properties": {
+                                "name": {
+                                    "type": "string"
+                                },
+                                "file_path": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": ["name", "file_path"],
+                            "additionalProperties": false
                         }
                     },
-                    "required": ["id"],
                     "additionalProperties": false
                 }),
             },
@@ -229,16 +263,45 @@ fn handle_tools_list(stdout: &mut io::Stdout, id: Option<Value>) -> anyhow::Resu
             },
             ToolDefinition {
                 name: "trace_impact".to_string(),
-                description: "Trace upstream callers and references that impact a node.".to_string(),
+                description: "Trace upstream callers and references that impact a node."
+                    .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "id": {
                             "type": "string",
                             "description": "Exact node identifier."
+                        },
+                        "identifier": {
+                            "type": "object",
+                            "description": "Alternative node lookup by symbol name and repo-relative file path.",
+                            "properties": {
+                                "name": {
+                                    "type": "string"
+                                },
+                                "file_path": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": ["name", "file_path"],
+                            "additionalProperties": false
+                        },
+                        "depth": {
+                            "type": "integer",
+                            "description": "Maximum recursive trace depth. Defaults to 2 and is capped at 10."
                         }
                     },
-                    "required": ["id"],
+                    "additionalProperties": false
+                }),
+            },
+            ToolDefinition {
+                name: "list_indexed_files".to_string(),
+                description:
+                    "List indexed file paths with last-indexed timestamps and symbol stats."
+                        .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
                     "additionalProperties": false
                 }),
             },
@@ -280,16 +343,37 @@ fn handle_tools_call(
                     Some(args) => args,
                     None => return Ok(()),
                 };
-            let results = query::search_symbols(conn, &args.query)?;
+            let results = query::search_symbols(
+                conn,
+                &args.query,
+                &query::SearchOptions {
+                    limit: args.limit.unwrap_or(50),
+                    offset: args.offset.unwrap_or(0),
+                    local_only: args.local_only.unwrap_or(true),
+                },
+            )?;
             serde_json::to_string_pretty(&results)?
         }
         "get_node_details" => {
-            let args: NodeIdArgs = match parse_tool_arguments(stdout, &request.arguments, id.clone())?
-            {
-                Some(args) => args,
-                None => return Ok(()),
+            let args: NodeLookupArgs =
+                match parse_tool_arguments(stdout, &request.arguments, id.clone())? {
+                    Some(args) => args,
+                    None => return Ok(()),
+                };
+            let lookup = match args.into_lookup() {
+                Ok(lookup) => lookup,
+                Err(error) => {
+                    write_error_response(
+                        stdout,
+                        Some(id),
+                        INVALID_PARAMS,
+                        "Invalid tool call parameters",
+                        Some(json!(error.to_string())),
+                    )?;
+                    return Ok(());
+                }
             };
-            let result = query::get_node_details(conn, &args.id)?;
+            let result = query::get_node_details(conn, &lookup)?;
             serde_json::to_string_pretty(&result)?
         }
         "list_file_symbols" => {
@@ -302,14 +386,34 @@ fn handle_tools_call(
             serde_json::to_string_pretty(&result)?
         }
         "trace_impact" => {
-            let args: NodeIdArgs = match parse_tool_arguments(stdout, &request.arguments, id.clone())?
-            {
-                Some(args) => args,
-                None => return Ok(()),
+            let args: TraceImpactArgs =
+                match parse_tool_arguments(stdout, &request.arguments, id.clone())? {
+                    Some(args) => args,
+                    None => return Ok(()),
+                };
+            let lookup = match args.lookup.into_lookup() {
+                Ok(lookup) => lookup,
+                Err(error) => {
+                    write_error_response(
+                        stdout,
+                        Some(id),
+                        INVALID_PARAMS,
+                        "Invalid tool call parameters",
+                        Some(json!(error.to_string())),
+                    )?;
+                    return Ok(());
+                }
             };
-            let result = query::trace_impact(conn, &args.id)?;
+            let result = query::trace_impact(
+                conn,
+                &lookup,
+                &query::TraceOptions {
+                    depth: args.depth.unwrap_or(2),
+                },
+            )?;
             serde_json::to_string_pretty(&result)?
         }
+        "list_indexed_files" => serde_json::to_string_pretty(&query::list_indexed_files(conn)?)?,
         _ => {
             write_error_response(stdout, Some(id), INVALID_PARAMS, "Unknown tool", None)?;
             return Ok(());
@@ -362,7 +466,10 @@ where
 }
 
 fn normalize_path(path: &str) -> String {
-    path.trim().replace('\\', "/").trim_start_matches("./").to_string()
+    path.trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
 }
 
 fn write_success_response(stdout: &mut io::Stdout, id: Value, result: Value) -> anyhow::Result<()> {
@@ -507,14 +614,39 @@ struct TextContent {
 #[derive(Debug, Deserialize)]
 struct SearchCodebaseArgs {
     query: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    local_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
-struct NodeIdArgs {
-    id: String,
+struct NodeLookupArgs {
+    id: Option<String>,
+    identifier: Option<NodeIdentifier>,
+}
+
+impl NodeLookupArgs {
+    fn into_lookup(self) -> anyhow::Result<query::NodeLookup> {
+        match (self.id, self.identifier) {
+            (Some(id), None) => Ok(query::NodeLookup::Id(id)),
+            (None, Some(identifier)) => Ok(query::NodeLookup::Identifier(NodeIdentifier {
+                name: identifier.name,
+                file_path: normalize_path(&identifier.file_path),
+            })),
+            (Some(_), Some(_)) => bail!("provide either id or identifier, not both"),
+            (None, None) => bail!("provide either id or identifier"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct FilePathArgs {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TraceImpactArgs {
+    #[serde(flatten)]
+    lookup: NodeLookupArgs,
+    depth: Option<i64>,
 }

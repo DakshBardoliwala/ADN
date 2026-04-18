@@ -4,23 +4,21 @@ mod support;
 use support::TestWorkspace;
 
 fn search_for_symbol(workspace: &TestWorkspace, query: &str) -> Vec<Value> {
-    let session = workspace.run_mcp_session(
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "search_codebase",
-                    "arguments": {
-                        "query": query
-                    }
+    let session = workspace.run_mcp_session(&[
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "search_codebase",
+                "arguments": {
+                    "query": query
                 }
-            }),
-        ],
-    );
+            }
+        }),
+    ]);
 
     assert!(
         session.stderr.is_empty(),
@@ -40,11 +38,15 @@ fn initialize_returns_jsonrpc_2_and_matching_id() {
     let workspace = TestWorkspace::new();
     workspace.index_fixture_ok("mcp_sample");
 
-    let session = workspace.run_mcp_session(
-        &[json!({"jsonrpc": "2.0", "id": 41, "method": "initialize", "params": {}})],
-    );
+    let session = workspace.run_mcp_session(&[
+        json!({"jsonrpc": "2.0", "id": 41, "method": "initialize", "params": {}}),
+    ]);
 
-    assert!(session.stderr.is_empty(), "unexpected stderr:\n{}", session.stderr);
+    assert!(
+        session.stderr.is_empty(),
+        "unexpected stderr:\n{}",
+        session.stderr
+    );
     assert_eq!(session.responses.len(), 1);
     assert_eq!(session.responses[0]["jsonrpc"], "2.0");
     assert_eq!(session.responses[0]["id"], 41);
@@ -56,14 +58,16 @@ fn tools_list_is_rejected_before_initialized_notification() {
     let workspace = TestWorkspace::new();
     workspace.index_fixture_ok("mcp_sample");
 
-    let session = workspace.run_mcp_session(
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-        ],
-    );
+    let session = workspace.run_mcp_session(&[
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    ]);
 
-    assert!(session.stderr.is_empty(), "unexpected stderr:\n{}", session.stderr);
+    assert!(
+        session.stderr.is_empty(),
+        "unexpected stderr:\n{}",
+        session.stderr
+    );
     assert_eq!(session.responses.len(), 2);
     assert_eq!(session.responses[1]["jsonrpc"], "2.0");
     assert_eq!(session.responses[1]["id"], 2);
@@ -79,15 +83,17 @@ fn tools_list_succeeds_after_handshake() {
     let workspace = TestWorkspace::new();
     workspace.index_fixture_ok("mcp_sample");
 
-    let session = workspace.run_mcp_session(
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-        ],
-    );
+    let session = workspace.run_mcp_session(&[
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    ]);
 
-    assert!(session.stderr.is_empty(), "unexpected stderr:\n{}", session.stderr);
+    assert!(
+        session.stderr.is_empty(),
+        "unexpected stderr:\n{}",
+        session.stderr
+    );
     assert_eq!(session.responses.len(), 2);
     assert_eq!(session.responses[1]["jsonrpc"], "2.0");
     assert_eq!(session.responses[1]["id"], 2);
@@ -111,25 +117,27 @@ fn tools_call_returns_text_content_and_expected_query_results() {
     let workspace = TestWorkspace::new();
     workspace.index_fixture_ok("mcp_sample");
 
-    let session = workspace.run_mcp_session(
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "search_codebase",
-                    "arguments": {
-                        "query": "helper"
-                    }
+    let session = workspace.run_mcp_session(&[
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "search_codebase",
+                "arguments": {
+                    "query": "helper"
                 }
-            }),
-        ],
-    );
+            }
+        }),
+    ]);
 
-    assert!(session.stderr.is_empty(), "unexpected stderr:\n{}", session.stderr);
+    assert!(
+        session.stderr.is_empty(),
+        "unexpected stderr:\n{}",
+        session.stderr
+    );
     assert_eq!(session.responses.len(), 2);
     assert_eq!(session.responses[1]["jsonrpc"], "2.0");
     assert_eq!(session.responses[1]["id"], 2);
@@ -138,7 +146,8 @@ fn tools_call_returns_text_content_and_expected_query_results() {
     let content = session.responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("tool result should include text payload");
-    let payload = serde_json::from_str::<Vec<Value>>(content).expect("payload should be valid json");
+    let payload =
+        serde_json::from_str::<Vec<Value>>(content).expect("payload should be valid json");
 
     assert!(
         payload
@@ -153,24 +162,26 @@ fn invalid_tool_arguments_return_error_without_killing_server() {
     let workspace = TestWorkspace::new();
     workspace.index_fixture_ok("mcp_sample");
 
-    let session = workspace.run_mcp_session(
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "search_codebase",
-                    "arguments": {}
-                }
-            }),
-            json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
-        ],
-    );
+    let session = workspace.run_mcp_session(&[
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "search_codebase",
+                "arguments": {}
+            }
+        }),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
+    ]);
 
-    assert!(session.stderr.is_empty(), "unexpected stderr:\n{}", session.stderr);
+    assert!(
+        session.stderr.is_empty(),
+        "unexpected stderr:\n{}",
+        session.stderr
+    );
     assert_eq!(session.responses.len(), 3);
     assert_eq!(session.responses[1]["id"], 2);
     assert_eq!(session.responses[1]["error"]["code"], -32602);
@@ -195,25 +206,27 @@ fn trace_impact_returns_text_content_for_imported_symbol() {
         .expect("helper function should be indexed")
         .to_string();
 
-    let session = workspace.run_mcp_session(
-        &[
-            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "trace_impact",
-                    "arguments": {
-                        "id": helper_id
-                    }
+    let session = workspace.run_mcp_session(&[
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "trace_impact",
+                "arguments": {
+                    "id": helper_id
                 }
-            }),
-        ],
-    );
+            }
+        }),
+    ]);
 
-    assert!(session.stderr.is_empty(), "unexpected stderr:\n{}", session.stderr);
+    assert!(
+        session.stderr.is_empty(),
+        "unexpected stderr:\n{}",
+        session.stderr
+    );
     assert_eq!(session.responses[1]["result"]["content"][0]["type"], "text");
 
     let content = session.responses[1]["result"]["content"][0]["text"]

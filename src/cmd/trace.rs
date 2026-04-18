@@ -1,9 +1,13 @@
 use crate::models::{StoredNode, TraceResult, TraceTreeNode};
 use crate::storage::{db, query};
 
-pub fn run(node_id: &str, json: bool) -> anyhow::Result<()> {
+pub fn run(
+    lookup: query::NodeLookup,
+    options: query::TraceOptions,
+    json: bool,
+) -> anyhow::Result<()> {
     let conn = db::init_db()?;
-    let trace = query::trace_impact(&conn, node_id)?;
+    let trace = query::trace_impact(&conn, &lookup, &options)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&trace)?);
@@ -11,9 +15,14 @@ pub fn run(node_id: &str, json: bool) -> anyhow::Result<()> {
     }
 
     let Some(trace) = trace else {
-        println!("No node found for id: {}", node_id.trim());
+        println!("No node found for the requested lookup.");
         return Ok(());
     };
+
+    if trace.ambiguous {
+        println!("Ambiguous lookup: showing the first matching definition by start line.");
+        println!();
+    }
 
     println!("{}", format_target_header(&trace));
 

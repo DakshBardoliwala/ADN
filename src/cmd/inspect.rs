@@ -1,9 +1,9 @@
 use crate::models::{StoredEdge, StoredNode};
 use crate::storage::{db, query};
 
-pub fn run(node_id: &str, json: bool) -> anyhow::Result<()> {
+pub fn run(lookup: query::NodeLookup, json: bool) -> anyhow::Result<()> {
     let conn = db::init_db()?;
-    let details = query::get_node_details(&conn, node_id)?;
+    let details = query::get_node_details(&conn, &lookup)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&details)?);
@@ -11,9 +11,14 @@ pub fn run(node_id: &str, json: bool) -> anyhow::Result<()> {
     }
 
     let Some(details) = details else {
-        println!("No node found for id: {}", node_id.trim());
+        println!("No node found for the requested lookup.");
         return Ok(());
     };
+
+    if details.ambiguous {
+        println!("Ambiguous lookup: showing the first matching definition by start line.");
+        println!();
+    }
 
     println!("{}", format_node_header(&details.node));
     println!();

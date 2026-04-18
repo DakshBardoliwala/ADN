@@ -77,6 +77,7 @@ fn extract_symbols_and_edges(
     tree: &Tree,
     content_hash: String,
 ) -> anyhow::Result<(ParsedFileGraph, Vec<DeferredImport>)> {
+    let indexed_at = db::current_timestamp(conn)?;
     let file_node = PendingNode {
         id: Uuid::new_v4().to_string(),
         kind: "file".to_string(),
@@ -85,6 +86,7 @@ fn extract_symbols_and_edges(
         start_line: None,
         end_line: None,
         content_hash: Some(content_hash),
+        indexed_at: indexed_at.clone(),
     };
 
     let mut state = ExtractionState {
@@ -100,6 +102,7 @@ fn extract_symbols_and_edges(
         tree.root_node(),
         source_code,
         relative_file_path,
+        &indexed_at,
         &mut state,
         None,
         0,
@@ -121,6 +124,7 @@ fn walk_scope(
     node: Node,
     source_code: &str,
     file_path: &str,
+    indexed_at: &str,
     state: &mut ExtractionState,
     parent_scope: Option<ScopeContext>,
     depth: usize,
@@ -133,7 +137,7 @@ fn walk_scope(
         "class_definition" => {
             let class_name = child_field_text(node, "name", source_code)?
                 .ok_or_else(|| anyhow!("class_definition missing name field"))?;
-            let class_node = build_symbol_node("class", class_name, file_path, node);
+            let class_node = build_symbol_node("class", class_name, file_path, node, indexed_at);
             let class_id = class_node.id.clone();
             state.graph.nodes.push(class_node);
 
@@ -149,7 +153,15 @@ fn walk_scope(
             });
 
             if let Some(body) = node.child_by_field_name("body") {
-                walk_scope(body, source_code, file_path, state, next_scope, depth + 1)?;
+                walk_scope(
+                    body,
+                    source_code,
+                    file_path,
+                    indexed_at,
+                    state,
+                    next_scope,
+                    depth + 1,
+                )?;
             }
 
             Ok(())
@@ -157,7 +169,8 @@ fn walk_scope(
         "function_definition" => {
             let function_name = child_field_text(node, "name", source_code)?
                 .ok_or_else(|| anyhow!("function_definition missing name field"))?;
-            let function_node = build_symbol_node("function", function_name, file_path, node);
+            let function_node =
+                build_symbol_node("function", function_name, file_path, node, indexed_at);
             let function_id = function_node.id.clone();
             state.graph.nodes.push(function_node);
 
@@ -173,7 +186,15 @@ fn walk_scope(
             });
 
             if let Some(body) = node.child_by_field_name("body") {
-                walk_scope(body, source_code, file_path, state, next_scope, depth + 1)?;
+                walk_scope(
+                    body,
+                    source_code,
+                    file_path,
+                    indexed_at,
+                    state,
+                    next_scope,
+                    depth + 1,
+                )?;
             }
 
             Ok(())
@@ -185,6 +206,7 @@ fn walk_scope(
                     child,
                     source_code,
                     file_path,
+                    indexed_at,
                     state,
                     parent_scope.clone(),
                     depth + 1,
@@ -311,7 +333,13 @@ fn push_edge(state: &mut ExtractionState, source_id: &str, target_id: &str, rela
     }
 }
 
-fn build_symbol_node(kind: &str, name: &str, file_path: &str, node: Node) -> PendingNode {
+fn build_symbol_node(
+    kind: &str,
+    name: &str,
+    file_path: &str,
+    node: Node,
+    indexed_at: &str,
+) -> PendingNode {
     PendingNode {
         id: Uuid::new_v4().to_string(),
         kind: kind.to_string(),
@@ -320,6 +348,7 @@ fn build_symbol_node(kind: &str, name: &str, file_path: &str, node: Node) -> Pen
         start_line: Some(line_number(node.start_position().row)),
         end_line: Some(line_number(node.end_position().row)),
         content_hash: None,
+        indexed_at: indexed_at.to_string(),
     }
 }
 
@@ -520,10 +549,11 @@ fn get_or_create_synthetic_module_id(
     }
 
     let module_id = Uuid::new_v4().to_string();
+    let indexed_at = db::current_timestamp(conn)?;
     conn.execute(
-        "INSERT INTO nodes (id, kind, name, file_path, start_line, end_line, content_hash)
-         VALUES (?1, 'module', ?2, ?3, NULL, NULL, NULL)",
-        [&module_id, module_name, MODULE_FILE_PATH],
+        "INSERT INTO nodes (id, kind, name, file_path, start_line, end_line, content_hash, indexed_at)
+         VALUES (?1, 'module', ?2, ?3, NULL, NULL, NULL, ?4)",
+        [&module_id, module_name, MODULE_FILE_PATH, &indexed_at],
     )?;
 
     Ok(module_id)

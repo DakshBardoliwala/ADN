@@ -2,40 +2,96 @@ use std::collections::HashMap;
 
 use rusqlite::{params, Connection};
 
-use crate::models::{NodeDetails, StoredEdge, StoredNode, TraceResult, TraceTreeNode};
+use crate::models::{
+    IndexedFileEntry, IndexedFilesResult, IndexedFilesStats, NodeDetails, NodeIdentifier,
+    StoredEdge, StoredNode, TraceResult, TraceTreeNode,
+};
 
-pub fn search_symbols(conn: &Connection, query: &str) -> anyhow::Result<Vec<StoredNode>> {
+const MODULE_FILE_PATH: &str = "<module>";
+const DEFAULT_SEARCH_LIMIT: i64 = 50;
+const DEFAULT_SEARCH_OFFSET: i64 = 0;
+const DEFAULT_TRACE_DEPTH: i64 = 2;
+const MAX_TRACE_DEPTH: i64 = 10;
+
+#[derive(Debug, Clone)]
+pub struct SearchOptions {
+    pub limit: i64,
+    pub offset: i64,
+    pub local_only: bool,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_SEARCH_LIMIT,
+            offset: DEFAULT_SEARCH_OFFSET,
+            local_only: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum NodeLookup {
+    Id(String),
+    Identifier(NodeIdentifier),
+}
+
+#[derive(Debug, Clone)]
+pub struct TraceOptions {
+    pub depth: i64,
+}
+
+impl Default for TraceOptions {
+    fn default() -> Self {
+        Self {
+            depth: DEFAULT_TRACE_DEPTH,
+        }
+    }
+}
+
+pub fn search_symbols(
+    conn: &Connection,
+    query: &str,
+    options: &SearchOptions,
+) -> anyhow::Result<Vec<StoredNode>> {
     let pattern = format!("%{}%", query.trim());
     let mut stmt = conn.prepare(
-        "SELECT id, kind, name, file_path, start_line, end_line, content_hash
+        "SELECT id, kind, name, file_path, start_line, end_line, content_hash, indexed_at
          FROM nodes
          WHERE LOWER(name) LIKE LOWER(?1)
-         ORDER BY kind ASC, name ASC, file_path ASC, start_line ASC",
+           AND (?2 = 0 OR file_path != ?3)
+         ORDER BY kind ASC, name ASC, file_path ASC, start_line ASC
+         LIMIT ?4 OFFSET ?5",
     )?;
 
-    let rows = stmt.query_map([pattern], map_node_row)?;
+    let rows = stmt.query_map(
+        params![
+            pattern,
+            bool_to_sqlite_flag(options.local_only),
+            MODULE_FILE_PATH,
+            normalize_limit(options.limit),
+            normalize_offset(options.offset)
+        ],
+        map_node_row,
+    )?;
 
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
-pub fn get_node_details(conn: &Connection, id: &str) -> anyhow::Result<Option<NodeDetails>> {
-    let mut node_stmt = conn.prepare(
-        "SELECT id, kind, name, file_path, start_line, end_line, content_hash
-         FROM nodes
-         WHERE id = ?1",
-    )?;
-
-    let mut node_rows = node_stmt.query([id])?;
-    let Some(row) = node_rows.next()? else {
+pub fn get_node_details(
+    conn: &Connection,
+    lookup: &NodeLookup,
+) -> anyhow::Result<Option<NodeDetails>> {
+    let Some(resolved) = resolve_node_lookup(conn, lookup)? else {
         return Ok(None);
     };
 
-    let node = map_node(row)?;
-    let outgoing = get_edges_by_column(conn, "source_id", id)?;
-    let incoming = get_edges_by_column(conn, "target_id", id)?;
+    let outgoing = get_edges_by_column(conn, "source_id", &resolved.node.id)?;
+    let incoming = get_edges_by_column(conn, "target_id", &resolved.node.id)?;
 
     Ok(Some(NodeDetails {
-        node,
+        node: resolved.node,
+        ambiguous: resolved.ambiguous,
         outgoing,
         incoming,
     }))
@@ -43,7 +99,7 @@ pub fn get_node_details(conn: &Connection, id: &str) -> anyhow::Result<Option<No
 
 pub fn get_file_symbols(conn: &Connection, path: &str) -> anyhow::Result<Vec<StoredNode>> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, name, file_path, start_line, end_line, content_hash
+        "SELECT id, kind, name, file_path, start_line, end_line, content_hash, indexed_at
          FROM nodes
          WHERE file_path = ?1
          ORDER BY start_line ASC, end_line ASC, name ASC",
@@ -54,11 +110,15 @@ pub fn get_file_symbols(conn: &Connection, path: &str) -> anyhow::Result<Vec<Sto
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
-pub fn trace_impact(conn: &Connection, id: &str) -> anyhow::Result<Option<TraceResult>> {
-    let target = get_node_by_id(conn, id)?;
-    let Some(target) = target else {
+pub fn trace_impact(
+    conn: &Connection,
+    lookup: &NodeLookup,
+    options: &TraceOptions,
+) -> anyhow::Result<Option<TraceResult>> {
+    let Some(resolved) = resolve_node_lookup(conn, lookup)? else {
         return Ok(None);
     };
+    let depth = normalize_trace_depth(options.depth);
 
     let mut stmt = conn.prepare(
         "WITH RECURSIVE impact(node_id, child_id, relation, depth, path) AS (
@@ -95,14 +155,15 @@ pub fn trace_impact(conn: &Connection, id: &str) -> anyhow::Result<Option<TraceR
              nodes.file_path,
              nodes.start_line,
              nodes.end_line,
-             nodes.content_hash
+             nodes.content_hash,
+             nodes.indexed_at
          FROM impact
          JOIN nodes ON nodes.id = impact.node_id
          ORDER BY impact.depth ASC, impact.child_id ASC, impact.relation ASC, nodes.file_path ASC,
                   nodes.start_line ASC, nodes.name ASC",
     )?;
 
-    let rows = stmt.query_map(params![id, 5_i64], |row| {
+    let rows = stmt.query_map(params![resolved.node.id, depth], |row| {
         Ok(FlatTraceRow {
             node_id: row.get(0)?,
             child_id: row.get(1)?,
@@ -116,6 +177,7 @@ pub fn trace_impact(conn: &Connection, id: &str) -> anyhow::Result<Option<TraceR
                 start_line: row.get(8)?,
                 end_line: row.get(9)?,
                 content_hash: row.get(10)?,
+                indexed_at: row.get(11)?,
             },
         })
     })?;
@@ -132,10 +194,45 @@ pub fn trace_impact(conn: &Connection, id: &str) -> anyhow::Result<Option<TraceR
     }
 
     Ok(Some(TraceResult {
-        target: target.clone(),
+        target: resolved.node.clone(),
+        ambiguous: resolved.ambiguous,
         max_depth,
-        children: build_trace_children(&target.id, &rows_by_child),
+        children: build_trace_children(&resolved.node.id, &rows_by_child),
     }))
+}
+
+pub fn list_indexed_files(conn: &Connection) -> anyhow::Result<IndexedFilesResult> {
+    let mut files_stmt = conn.prepare(
+        "SELECT file_path, MAX(indexed_at) AS last_indexed
+         FROM nodes
+         WHERE file_path != ?1
+         GROUP BY file_path
+         ORDER BY file_path ASC",
+    )?;
+    let files = files_stmt
+        .query_map([MODULE_FILE_PATH], |row| {
+            Ok(IndexedFileEntry {
+                file_path: row.get(0)?,
+                last_indexed: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let stats = conn.query_row(
+        "SELECT
+             SUM(CASE WHEN file_path != ?1 AND kind != 'file' THEN 1 ELSE 0 END),
+             SUM(CASE WHEN file_path = ?1 THEN 1 ELSE 0 END)
+         FROM nodes",
+        [MODULE_FILE_PATH],
+        |row| {
+            Ok(IndexedFilesStats {
+                local_symbols: row.get(0)?,
+                external_modules: row.get(1)?,
+            })
+        },
+    )?;
+
+    Ok(IndexedFilesResult { files, stats })
 }
 
 fn get_edges_by_column(
@@ -164,7 +261,7 @@ fn get_edges_by_column(
 
 fn get_node_by_id(conn: &Connection, id: &str) -> anyhow::Result<Option<StoredNode>> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, name, file_path, start_line, end_line, content_hash
+        "SELECT id, kind, name, file_path, start_line, end_line, content_hash, indexed_at
          FROM nodes
          WHERE id = ?1",
     )?;
@@ -175,6 +272,55 @@ fn get_node_by_id(conn: &Connection, id: &str) -> anyhow::Result<Option<StoredNo
     };
 
     Ok(Some(map_node(row)?))
+}
+
+fn resolve_node_lookup(
+    conn: &Connection,
+    lookup: &NodeLookup,
+) -> anyhow::Result<Option<ResolvedNode>> {
+    match lookup {
+        NodeLookup::Id(id) => Ok(get_node_by_id(conn, id)?.map(|node| ResolvedNode {
+            node,
+            ambiguous: false,
+        })),
+        NodeLookup::Identifier(identifier) => resolve_node_by_identifier(conn, identifier),
+    }
+}
+
+fn resolve_node_by_identifier(
+    conn: &Connection,
+    identifier: &NodeIdentifier,
+) -> anyhow::Result<Option<ResolvedNode>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+             id,
+             kind,
+             name,
+             file_path,
+             start_line,
+             end_line,
+             content_hash,
+             indexed_at,
+             (
+                 SELECT COUNT(*)
+                 FROM nodes AS match_nodes
+                 WHERE match_nodes.name = ?1 AND match_nodes.file_path = ?2
+             ) AS match_count
+         FROM nodes
+         WHERE name = ?1 AND file_path = ?2
+         ORDER BY start_line IS NULL ASC, start_line ASC, end_line IS NULL ASC, end_line ASC, id ASC
+         LIMIT 1",
+    )?;
+
+    let mut rows = stmt.query(params![identifier.name, identifier.file_path])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+
+    Ok(Some(ResolvedNode {
+        node: map_node(row)?,
+        ambiguous: row.get::<_, i64>(8)? > 1,
+    }))
 }
 
 fn build_trace_children(
@@ -209,7 +355,28 @@ fn map_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredNode> {
         start_line: row.get(4)?,
         end_line: row.get(5)?,
         content_hash: row.get(6)?,
+        indexed_at: row.get(7)?,
     })
+}
+
+fn bool_to_sqlite_flag(value: bool) -> i64 {
+    if value {
+        1
+    } else {
+        0
+    }
+}
+
+fn normalize_limit(limit: i64) -> i64 {
+    limit.max(0)
+}
+
+fn normalize_offset(offset: i64) -> i64 {
+    offset.max(0)
+}
+
+fn normalize_trace_depth(depth: i64) -> i64 {
+    depth.clamp(0, MAX_TRACE_DEPTH).max(1)
 }
 
 #[derive(Debug, Clone)]
@@ -219,4 +386,10 @@ struct FlatTraceRow {
     relation: String,
     depth: i64,
     node: StoredNode,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedNode {
+    node: StoredNode,
+    ambiguous: bool,
 }

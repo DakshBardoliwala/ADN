@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct PendingNode {
@@ -9,6 +9,7 @@ pub struct PendingNode {
     pub start_line: Option<i64>,
     pub end_line: Option<i64>,
     pub content_hash: Option<String>,
+    pub indexed_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,13 @@ pub struct StoredNode {
     pub start_line: Option<i64>,
     pub end_line: Option<i64>,
     pub content_hash: Option<String>,
+    pub indexed_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NodeIdentifier {
+    pub name: String,
+    pub file_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +63,7 @@ pub struct StoredEdge {
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeDetails {
     pub node: StoredNode,
+    pub ambiguous: bool,
     pub outgoing: Vec<StoredEdge>,
     pub incoming: Vec<StoredEdge>,
 }
@@ -70,6 +79,25 @@ pub struct TraceTreeNode {
 #[derive(Debug, Clone, Serialize)]
 pub struct TraceResult {
     pub target: StoredNode,
+    pub ambiguous: bool,
     pub max_depth: i64,
     pub children: Vec<TraceTreeNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexedFileEntry {
+    pub file_path: String,
+    pub last_indexed: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexedFilesStats {
+    pub local_symbols: i64,
+    pub external_modules: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexedFilesResult {
+    pub files: Vec<IndexedFileEntry>,
+    pub stats: IndexedFilesStats,
 }

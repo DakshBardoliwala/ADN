@@ -9,6 +9,7 @@ pub fn init_db() -> anyhow::Result<Connection> {
     let conn = Connection::open("adn.db")?;
 
     conn.execute_batch(schema::CREATE_TABLES)?;
+    ensure_nodes_indexed_at_column(&conn)?;
 
     Ok(conn)
 }
@@ -18,8 +19,8 @@ pub fn persist_file_graph(conn: &mut Connection, graph: &ParsedFileGraph) -> any
 
     {
         let mut insert_node = tx.prepare(
-            "INSERT INTO nodes (id, kind, name, file_path, start_line, end_line, content_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO nodes (id, kind, name, file_path, start_line, end_line, content_hash, indexed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
 
         if let Some(file_node) = &graph.file_node {
@@ -31,6 +32,7 @@ pub fn persist_file_graph(conn: &mut Connection, graph: &ParsedFileGraph) -> any
                 file_node.start_line,
                 file_node.end_line,
                 &file_node.content_hash,
+                &file_node.indexed_at,
             ))?;
         }
 
@@ -43,6 +45,7 @@ pub fn persist_file_graph(conn: &mut Connection, graph: &ParsedFileGraph) -> any
                 node.start_line,
                 node.end_line,
                 &node.content_hash,
+                &node.indexed_at,
             ))?;
         }
     }
@@ -66,6 +69,13 @@ pub fn persist_file_graph(conn: &mut Connection, graph: &ParsedFileGraph) -> any
     tx.commit()?;
 
     Ok(())
+}
+
+pub fn current_timestamp(conn: &Connection) -> anyhow::Result<String> {
+    conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
+        row.get(0)
+    })
+    .map_err(Into::into)
 }
 
 pub fn insert_edge(
@@ -123,6 +133,27 @@ pub fn delete_file_graph(conn: &mut Connection, file_path: &str) -> anyhow::Resu
     )?;
 
     tx.commit()?;
+
+    Ok(())
+}
+
+fn ensure_nodes_indexed_at_column(conn: &Connection) -> anyhow::Result<()> {
+    let has_indexed_at = conn
+        .prepare("PRAGMA table_info(nodes)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|column_name| column_name == "indexed_at");
+
+    if !has_indexed_at {
+        conn.execute("ALTER TABLE nodes ADD COLUMN indexed_at TEXT", [])?;
+        conn.execute(
+            "UPDATE nodes
+             SET indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE indexed_at IS NULL",
+            [],
+        )?;
+    }
 
     Ok(())
 }

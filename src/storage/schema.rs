@@ -7,7 +7,8 @@ pub const CREATE_TABLES: &str = "
         file_path TEXT NOT NULL,
         start_line INTEGER,
         end_line INTEGER,
-        content_hash TEXT
+        content_hash TEXT,
+        indexed_at TEXT NOT NULL
     );
 
     -- Represents relationships between graph nodes.

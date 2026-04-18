@@ -1,9 +1,9 @@
 use crate::models::StoredNode;
 use crate::storage::{db, query};
 
-pub fn run(query_text: &str, json: bool) -> anyhow::Result<()> {
+pub fn run(query_text: &str, options: query::SearchOptions, json: bool) -> anyhow::Result<()> {
     let conn = db::init_db()?;
-    let results = query::search_symbols(&conn, query_text)?;
+    let results = query::search_symbols(&conn, query_text, &options)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&results)?);
